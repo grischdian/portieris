@@ -15,6 +15,8 @@
 package oauth
 
 import (
+        "crypto/x509"
+        "crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -22,22 +24,29 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+        "os"
 
 	"github.com/golang/glog"
 )
 
-var client = &http.Client{
-	Timeout: 10 * time.Minute,
-	Transport: &http.Transport{
-		Dial: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).Dial,
-		DisableKeepAlives:   false,
-		MaxIdleConnsPerHost: 10,
-		TLSHandshakeTimeout: 5 * time.Second,
-	},
-}
+//var client = &http.Client{
+//	Timeout: 10 * time.Minute,
+//	Transport: &http.Transport{
+//		Dial: (&net.Dialer{
+//			Timeout:   5 * time.Second,
+//			KeepAlive: 30 * time.Second,
+//		}).Dial,
+//		DisableKeepAlives:   false,
+//		MaxIdleConnsPerHost: 10,
+//		TLSHandshakeTimeout: 5 * time.Second,
+//                TLSClientConfig: &tls.config{
+//			// Avoid fallback by default to SSL protocols < TLS1.2
+//                        MinVersion:               tls.VersionTLS12,
+//                        PreferServerCipherSuites: true,
+//                        RootCAs:                  rootCA,
+//
+//	},
+//}
 
 // Request is a helper for getting an OAuth token from the Registry OAuth Service.
 // Takes the following as input:
@@ -54,11 +63,50 @@ var client = &http.Client{
 func Request(token string, repo string, username string, writeAccessRequired bool, service string, hostname string) (*TokenResponse, error) {
 	var actions string
 	//If you want to verify if a the credential supplied has read and write access to the repo we ask oauth for pull,push and *
-	if writeAccessRequired {
+          if writeAccessRequired {
 		actions = "pull,push,*"
 	} else {
 		actions = "pull"
 	}
+	
+        customCA, err := ioutil.ReadFile("/etc/certs/ca.pem")
+	if err != nil {
+		if os.IsNotExist(err) {
+			glog.Info("CA not provided at /etc/certs/ca.pem, will use default system pool")
+		} else {
+			glog.Fatal("Could not read /etc/certs/ca.pem", err)
+		}
+	}
+
+        rootCA, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, err
+	}
+	if customCA != nil {
+		rootCA.AppendCertsFromPEM(customCA)
+	}
+
+        tlsConfig := tls.Config{
+                RootCAs: rootCA,
+                // Avoid fallback by default to SSL protocols < TLS1.2
+                MinVersion:               tls.VersionTLS12,
+                PreferServerCipherSuites: true,
+        }
+
+        var client = &http.Client{
+        	Timeout: 10 * time.Minute,
+        	Transport: &http.Transport{
+        		Dial: (&net.Dialer{
+        			Timeout:   5 * time.Second,
+        			KeepAlive: 30 * time.Second,
+        		}).Dial,
+        		DisableKeepAlives:   false,
+        		MaxIdleConnsPerHost: 10,
+        		TLSHandshakeTimeout: 5 * time.Second,
+                        TLSClientConfig: &tlsConfig,
+        
+        	},
+        }
 
 	resp, err := client.PostForm(hostname+"/oauth/token", url.Values{
 		"service":    {service},
